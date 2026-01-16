@@ -18,5 +18,20 @@ CREATE TABLE IF NOT EXISTS feed (
     content TEXT,
     published_date TEXT,
     added_by TEXT NOT NULL,
+    tts_enabled INTEGER DEFAULT 0,
+    audio_path TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create TTS queue table
+CREATE TABLE IF NOT EXISTS tts_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    title TEXT,
+    description TEXT,
+    added_by TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP
 );

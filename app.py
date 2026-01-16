@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, Cookie, HTTPException
+from fastapi import FastAPI, Request, Form, Cookie, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from urllib.parse import urlparse, urlunparse
@@ -13,6 +13,7 @@ import sqlite3
 import secrets
 import hashlib
 import os
+import asyncio
 from datetime import datetime
 from typing import Optional
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -71,6 +72,10 @@ def init_db():
 # Initialize database on startup
 init_db()
 
+# Create audio directory
+AUDIO_DIR = os.path.join(DATA_DIR, 'audio')
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
 def verify_session(session_id: Optional[str]) -> bool:
     """Verify if session is valid"""
     if not session_id:
@@ -78,7 +83,22 @@ def verify_session(session_id: Optional[str]) -> bool:
     return session_id in sessions
 
 
-def store_feed(url: str, title: str, description: str, username: str) -> bool:
+def add_to_tts_queue(url: str, title: str, description: str, username: str) -> bool:
+    """Add entry to TTS processing queue"""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO tts_queue (url, title, description, added_by, status) VALUES (?, ?, ?, ?, 'pending')",
+                (url, title, description, username)
+            )
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def store_feed(url: str, title: str, description: str, username: str, tts_enabled: bool = False) -> bool:
     """Store feed entry in database"""
     try:
         # Generate guid from URL hash
@@ -91,8 +111,8 @@ def store_feed(url: str, title: str, description: str, username: str) -> bool:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO feed (url, title, content, published_date, added_by) VALUES (?, ?, ?, ?, ?)",
-                (url, title, description, published, username)
+                "INSERT INTO feed (url, title, content, published_date, added_by, tts_enabled) VALUES (?, ?, ?, ?, ?, ?)",
+                (url, title, description, published, username, 1 if tts_enabled else 0)
             )
             conn.commit()
         
@@ -321,6 +341,7 @@ async def submit(request: Request,
                 url: str = Form(..., max_length=2000),
                 title: str = Form(..., max_length=200), 
                 description: str = Form(..., max_length=1000),
+                tts: Optional[str] = Form(None),
                 csrf_token: str = Form(...),
                 session_id: Optional[str] = Cookie(None)):
     """Handle URL submission (requires authentication)"""
@@ -328,6 +349,9 @@ async def submit(request: Request,
         return RedirectResponse(url="/login", status_code=303)
     
     username = sessions[session_id]['username']
+    
+    # Check if TTS is enabled
+    tts_enabled = tts == "true"
     
     # Validate CSRF token
     if not validate_csrf_token(csrf_token):
@@ -349,8 +373,23 @@ async def submit(request: Request,
     
     normalized_url = validation_result["url"]
     
-    # Store feed entry
-    stored = store_feed(normalized_url, title, description, username)
+    # If TTS is enabled, add to queue instead of directly storing
+    if tts_enabled:
+        queued = add_to_tts_queue(normalized_url, title, description, username)
+        new_token = generate_csrf_token()
+        if queued:
+            return templates.TemplateResponse(
+                "index.html", 
+                {"request": request, "submitted_url": normalized_url, "message": "Added to TTS queue for processing", "username": username, "csrf_token": new_token, "version": VERSION}
+            )
+        else:
+            return templates.TemplateResponse(
+                "index.html",
+                {"request": request, "error": "Failed to add to TTS queue", "username": username, "csrf_token": new_token, "version": VERSION}
+            )
+    
+    # Store feed entry directly (non-TTS)
+    stored = store_feed(normalized_url, title, description, username, tts_enabled=False)
     
     new_token = generate_csrf_token()
     if stored:
@@ -411,6 +450,141 @@ async def rss_feed(request: Request):
     base_url = f"{request.url.scheme}://{request.url.netloc}"
     xml_content = generate_rss_xml(base_url)
     return Response(content=xml_content, media_type="application/rss+xml; charset=utf-8")
+
+
+# TTS Queue Processing Functions
+async def process_tts_queue():
+    """Process pending TTS queue entries"""
+    try:
+        import trafilatura
+        import google.generativeai as genai
+        
+        # Configure Gemini API
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            print("Warning: GEMINI_API_KEY not set. TTS processing disabled.")
+            return
+        
+        genai.configure(api_key=api_key)
+        
+        # Get pending queue items (limit to 1 due to Gemini rate limits)
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM tts_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+            )
+            queue_items = cursor.fetchall()
+        
+        for item in queue_items:
+            try:
+                # Update status to processing
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE tts_queue SET status = 'processing' WHERE id = ?",
+                        (item['id'],)
+                    )
+                    conn.commit()
+                
+                # Download and extract content using trafilatura
+                downloaded = trafilatura.fetch_url(item['url'])
+                if not downloaded:
+                    raise Exception("Failed to download URL content")
+                
+                content = trafilatura.extract(downloaded)
+                if not content:
+                    raise Exception("Failed to extract text content from page")
+                
+                # Truncate content if too long (Gemini has token limits)
+                max_chars = 30000
+                if len(content) > max_chars:
+                    content = content[:max_chars] + "..."
+                
+                # Generate audio using Gemini TTS
+                model = genai.GenerativeModel('gemini-2.5-flash-tts')
+                
+                prompt = f"""Convert the following article to natural speech audio:
+
+Title: {item['title']}
+
+Content:
+{content}
+"""
+                
+                response = model.generate_content(
+                    prompt,
+                    generation_config={
+                        'response_modalities': ['AUDIO']
+                    }
+                )
+                
+                # Save audio file
+                audio_filename = f"{hashlib.sha256(item['url'].encode()).hexdigest()[:12]}.wav"
+                audio_path = os.path.join(AUDIO_DIR, audio_filename)
+                
+                # Write audio data
+                if hasattr(response, 'audio') and response.audio:
+                    with open(audio_path, 'wb') as f:
+                        f.write(response.audio)
+                else:
+                    raise Exception("No audio data received from Gemini API")
+                
+                # Store in feed table with audio path
+                published = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """INSERT INTO feed (url, title, content, published_date, added_by, tts_enabled, audio_path) 
+                           VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                        (item['url'], item['title'], item['description'], published, item['added_by'], audio_path)
+                    )
+                    conn.commit()
+                
+                # Update queue status to completed
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE tts_queue SET status = 'completed', processed_at = ? WHERE id = ?",
+                        (datetime.utcnow(), item['id'])
+                    )
+                    conn.commit()
+                
+                print(f"Successfully processed TTS for: {item['title']}")
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"Error processing TTS queue item {item['id']}: {error_msg}")
+                
+                # Update queue status to failed
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE tts_queue SET status = 'failed', error_message = ?, processed_at = ? WHERE id = ?",
+                        (error_msg, datetime.utcnow(), item['id'])
+                    )
+                    conn.commit()
+    
+    except Exception as e:
+        print(f"Error in TTS queue processing: {str(e)}")
+
+
+async def tts_worker():
+    """Background worker that processes TTS queue every minute"""
+    while True:
+        try:
+            await process_tts_queue()
+        except Exception as e:
+            print(f"TTS worker error: {str(e)}")
+        
+        # Wait 60 seconds before next poll
+        await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def start_tts_worker():
+    """Start the TTS worker on application startup"""
+    asyncio.create_task(tts_worker())
 
 
 if __name__ == "__main__":

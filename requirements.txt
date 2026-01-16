@@ -10,6 +10,7 @@ courlan==1.3.2
 dateparser==1.2.2
 Deprecated==1.3.1
 fastapi==0.128.0
+google-generativeai==0.8.3
 h11==0.16.0
 htmldate==1.9.4
 httpcore==1.0.9

@@ -11,4 +11,5 @@ services:
       - DATA_DIR=/app/data
       - PORT=8000
       - SECRET_KEY=${SECRET_KEY:-please-change-this-secret-key-in-production}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     restart: unless-stopped

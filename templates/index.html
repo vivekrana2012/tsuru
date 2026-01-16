@@ -173,6 +173,12 @@
             <label>Description</label>
             <input type="text" name="description" placeholder="" required>
         </div>
+        <div class="form-row">
+            <label>
+                <input type="checkbox" name="tts" value="true">
+                TTS
+            </label>
+        </div>
         <div class="button-row">
             <button type="submit">Add</button>
         </div>
@@ -181,6 +187,12 @@
     {% if error %}
     <div class="error">
         {{ error }}
+    </div>
+    {% endif %}
+
+    {% if message %}
+    <div class="message">
+        {{ message }}
     </div>
     {% endif %}
 
