@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tsuru (鶴)</title>
+    <style>
+        body {
+            font-family: "Courier New", Courier, monospace;
+            line-height: 1.6;
+            color: #000;
+            background-color: #fff;
+            padding: 40px;
+            max-width: 900px;
+            margin: 0 auto;
+            font-size: 14px;
+        }
+
+        h1 {
+            font-size: 1.5em;
+            font-weight: normal;
+            margin-bottom: 30px;
+        }
+
+        h1::before {
+            content: "# ";
+        }
+
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .form-container {
+            margin: 30px 0;
+            font-size: 14px;
+        }
+
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .form-row.title-section {
+            margin-top: 80px;
+        }
+
+        .button-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        label::before {
+            content: "[ ";
+        }
+
+        label::after {
+            content: " ]";
+        }
+
+        label {
+            white-space: nowrap;
+        }
+
+        input[type="url"],
+        input[type="text"] {
+            font-family: "Courier New", Courier, monospace;
+            flex: 1;
+            padding: 4px 8px;
+            border: none;
+            border-bottom: 1px solid #000;
+            background-color: transparent;
+            font-size: 14px;
+            outline: none;
+        }
+
+        input[type="url"]::placeholder,
+        input[type="text"]::placeholder {
+            color: #999;
+        }
+
+        button {
+            padding: 4px 12px;
+            background-color: transparent;
+            color: #000;
+            border: none;
+            font-family: "Courier New", Courier, monospace;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button::before {
+            content: "[ ";
+        }
+
+        button::after {
+            content: " ]";
+        }
+
+        button:hover {
+            background-color: #000;
+            color: #fff;
+        }
+
+        .message {
+            margin-top: 30px;
+            padding: 10px 0;
+            padding-left: 15px;
+        }
+
+        .message::before {
+            content: "> ";
+        }
+
+        .error {
+            margin-top: 30px;
+            padding: 10px 0;
+            padding-left: 15px;
+            color: #000;
+        }
+
+        .error::before {
+            content: "> ERROR: ";
+        }
+
+        code {
+            background-color: transparent;
+            font-family: "Courier New", Courier, monospace;
+        }
+
+        .user-info {
+            text-align: right;
+        }
+
+        .user-info a {
+            color: #000;
+            text-decoration: underline;
+        }
+
+        .version {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            font-size: 10px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-container">
+        <h1>Tsuru (鶴)</h1>
+        <div class="user-info">
+            Logged in as: {{ username }} | <a href="/logout">Logout</a>
+        </div>
+    </div>
+    
+    <form action="/submit" method="post" class="form-container" id="urlForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row">
+            <label>Paste URL here</label>
+            <input type="url" name="url" id="urlInput" placeholder="" required>
+        </div>
+        <div class="form-row title-section">
+            <label>Title</label>
+            <input type="text" name="title" placeholder="" required>
+        </div>
+        <div class="form-row">
+            <label>Description</label>
+            <input type="text" name="description" placeholder="" required>
+        </div>
+        <div class="button-row">
+            <button type="submit">Add</button>
+        </div>
+    </form>
+
+    {% if error %}
+    <div class="error">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if submitted_url %}
+    <div class="message">
+        Successfully added: {{ submitted_url }}
+    </div>
+    {% endif %}
+
+    <script>
+        // Client-side URL validation
+        document.getElementById('urlForm').addEventListener('submit', function(e) {
+            const urlInput = document.getElementById('urlInput');
+            const url = urlInput.value.trim();
+            
+            // Basic URL pattern validation
+            const urlPattern = /^(https?:\/\/)?(([\w-]+\.)+[\w-]+)(:\d+)?(\/[^\s]*)?$/i;
+            
+            if (!url || !urlPattern.test(url)) {
+                e.preventDefault();
+                alert('INVALID_URL: Please enter a valid URL');
+                return false;
+            }
+        });
+    </script>
+    <div class="version">v{{ version }}</div>
+</body>
+</html>
