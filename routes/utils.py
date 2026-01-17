@@ -1,4 +1,5 @@
 """Shared utilities for routes"""
+from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -25,6 +26,11 @@ csrf_serializer = URLSafeTimedSerializer(SECRET_KEY)
 # Load version
 with open('VERSION', 'r') as f:
     VERSION = f.read().strip()
+
+
+def get_base_path(request: Request) -> str:
+    """Get the base path for URLs from request scope (set by root_path)"""
+    return request.scope.get("root_path", "")
 
 
 def generate_csrf_token() -> str:
@@ -81,7 +87,7 @@ async def validate_url(url: str) -> dict:
         return {"valid": False, "error": "INVALID_URL"}
 
 
-def generate_rss_xml(base_url: str) -> str:
+def generate_rss_xml(base_url: str, base_path: str = "") -> str:
     """Generate RSS XML from database feed table"""
     # Create RSS root element
     rss = Element('rss', version='2.0')
@@ -122,7 +128,7 @@ def generate_rss_xml(base_url: str) -> str:
                 
                 # Construct audio URL
                 audio_filename = os.path.basename(audio_path)
-                audio_url = f"{base_url}/audio/{audio_filename}"
+                audio_url = f"{base_url}{base_path}/audio/{audio_filename}"
                 
                 # Add enclosure element
                 enclosure = SubElement(item, 'enclosure')

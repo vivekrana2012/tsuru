@@ -1,0 +1,146 @@
+# Example Nginx Configuration for Tsuru RSS Feed Manager
+# Save this to /etc/nginx/sites-available/tsuru
+# Then: sudo ln -s /etc/nginx/sites-available/tsuru /etc/nginx/sites-enabled/
+
+# =============================================================================
+# OPTION 1: ROOT PATH DEPLOYMENT
+# Deploy at https://example.com/
+# =============================================================================
+
+# server {
+#     listen 80;
+#     server_name example.com;
+#     
+#     location / {
+#         proxy_pass http://localhost:8000;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
+
+# =============================================================================
+# OPTION 2: SUB-PATH DEPLOYMENT
+# Deploy at https://example.com/manage/
+# Requires: ROOT_PATH=/manage in docker-compose.yml
+# =============================================================================
+
+server {
+    listen 80;
+    server_name example.com;
+
+    # Example: Other service at root
+    # location / {
+    #     proxy_pass http://localhost:3000;
+    #     # ... proxy settings
+    # }
+
+    # Example: Miniflux at /miniflux
+    # location /miniflux/ {
+    #     proxy_pass http://localhost:8080/;
+    #     proxy_set_header Host $host;
+    #     proxy_set_header X-Real-IP $remote_addr;
+    #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    #     proxy_set_header X-Forwarded-Proto $scheme;
+    # }
+
+    # Tsuru at /manage
+    location /manage/ {
+        proxy_pass http://localhost:8000/;  # Trailing slash is REQUIRED
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Optional: WebSocket support (for future features)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Optional: Increase timeouts for long TTS processing
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+    }
+}
+
+# =============================================================================
+# OPTION 3: SSL/HTTPS DEPLOYMENT WITH SUB-PATH
+# Deploy at https://example.com/manage/ with SSL
+# =============================================================================
+
+# server {
+#     listen 443 ssl http2;
+#     server_name example.com;
+# 
+#     # SSL Configuration
+#     ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers HIGH:!aNULL:!MD5;
+#     ssl_prefer_server_ciphers on;
+#     
+#     # Security Headers
+#     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+#     add_header X-Frame-Options "SAMEORIGIN" always;
+#     add_header X-Content-Type-Options "nosniff" always;
+#     add_header X-XSS-Protection "1; mode=block" always;
+# 
+#     # Tsuru at /manage
+#     location /manage/ {
+#         proxy_pass http://localhost:8000/;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         
+#         proxy_http_version 1.1;
+#         proxy_set_header Upgrade $http_upgrade;
+#         proxy_set_header Connection "upgrade";
+#         
+#         proxy_read_timeout 300s;
+#         proxy_connect_timeout 300s;
+#     }
+# }
+# 
+# # Redirect HTTP to HTTPS
+# server {
+#     listen 80;
+#     server_name example.com;
+#     return 301 https://$server_name$request_uri;
+# }
+
+# =============================================================================
+# CONFIGURATION NOTES
+# =============================================================================
+
+# 1. TRAILING SLASH IN PROXY_PASS
+#    proxy_pass http://localhost:8000/;  <- This trailing slash is CRITICAL
+#    It strips the /manage prefix before forwarding to the app
+#    
+#    Without trailing slash: nginx forwards /manage/login to app
+#    With trailing slash:    nginx forwards /login to app (correct)
+
+# 2. ROOT_PATH ENVIRONMENT VARIABLE
+#    Must match the nginx location:
+#    - nginx: location /manage/
+#    - docker: ROOT_PATH=/manage
+#    
+#    Mismatch will cause 404s or wrong redirects
+
+# 3. TESTING CONFIGURATION
+#    sudo nginx -t                    # Test syntax
+#    sudo systemctl reload nginx      # Reload config
+#    curl http://localhost/manage/    # Test endpoint
+
+# 4. DOCKER CONTAINER
+#    Ensure container is running and accessible:
+#    docker-compose ps                # Check status
+#    curl http://localhost:8000/      # Test direct access
+#    docker-compose logs -f           # Check logs
+
+# 5. COMMON ISSUES
+#    - 404 errors: Check trailing slash in proxy_pass
+#    - Wrong redirects: Check ROOT_PATH matches nginx location
+#    - CSS not loading: Verify nginx forwards all paths under /manage/
+#    - CSRF errors: Ensure proxy headers are set correctly

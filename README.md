@@ -249,6 +249,152 @@ The generated RSS feed follows RSS 2.0 specification with:
 ### Podcast Support
 The RSS feed includes podcast-compatible enclosure tags for entries with TTS-generated audio. This makes the feed compatible with podcast apps like Apple Podcasts, Spotify, and others.
 
+## Nginx Reverse Proxy Deployment
+
+Tsuru supports flexible deployment paths using nginx reverse proxy. You can run it at the root path or any sub-path.
+
+### Option 1: Root Path Deployment
+
+Deploy at root of domain (e.g., `https://example.com/`):
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Docker Compose Configuration:**
+```yaml
+environment:
+  - ROOT_PATH=
+  # Or omit ROOT_PATH entirely, it defaults to empty string
+```
+
+### Option 2: Sub-path Deployment
+
+Deploy at a sub-path (e.g., `https://example.com/manage/`):
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    # Other services at root or different paths
+    location /miniflux/ {
+        proxy_pass http://localhost:8080/;
+        # ... other proxy settings
+    }
+
+    # Tsuru at /manage
+    location /manage/ {
+        proxy_pass http://localhost:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Docker Compose Configuration:**
+```yaml
+environment:
+  - ROOT_PATH=/manage
+```
+
+**IMPORTANT:** The trailing slash in nginx `proxy_pass http://localhost:8000/;` is required. This strips the `/manage` prefix before forwarding to the app.
+
+### How it Works
+
+1. **nginx** receives request to `https://example.com/manage/login`
+2. **nginx** strips `/manage` and forwards `/login` to the app
+3. **App** generates URLs with `ROOT_PATH=/manage` prefix
+4. **Response** contains `/manage/login` in all links and redirects
+5. **Browser** sees correct URLs like `https://example.com/manage/login`
+
+### Complete Example with SSL
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+
+    ssl_certificate /etc/ssl/certs/example.com.crt;
+    ssl_certificate_key /etc/ssl/private/example.com.key;
+
+    location /manage/ {
+        proxy_pass http://localhost:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support (if needed in future)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+### Testing Your Configuration
+
+1. **Test nginx config:**
+   ```bash
+   sudo nginx -t
+   ```
+
+2. **Reload nginx:**
+   ```bash
+   sudo systemctl reload nginx
+   ```
+
+3. **Update docker-compose.yml:**
+   ```yaml
+   environment:
+     - ROOT_PATH=/manage  # Set to your sub-path
+   ```
+
+4. **Restart container:**
+   ```bash
+   docker-compose down
+   docker-compose up -d
+   ```
+
+5. **Test the deployment:**
+   - Login: `https://example.com/manage/login`
+   - Feed: `https://example.com/manage/feed.xml`
+   - Audio: `https://example.com/manage/audio/filename.wav`
+
+### Common Issues
+
+**Issue:** 404 errors when accessing sub-path
+- **Solution:** Ensure trailing slash in nginx `proxy_pass` directive
+- **Correct:** `proxy_pass http://localhost:8000/;`
+- **Wrong:** `proxy_pass http://localhost:8000;`
+
+**Issue:** Links redirect to wrong path
+- **Solution:** Verify `ROOT_PATH` environment variable matches nginx location
+- **Example:** nginx `location /manage/` requires `ROOT_PATH=/manage`
+
+**Issue:** Static files (audio) not loading
+- **Solution:** Check that `ROOT_PATH` is set correctly and nginx forwards all paths under `/manage/`
+
 ## Development
 
 ### URL Validation

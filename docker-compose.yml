@@ -12,4 +12,6 @@ services:
       - PORT=8000
       - SECRET_KEY=${SECRET_KEY:-please-change-this-secret-key-in-production}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Set ROOT_PATH for nginx sub-path deployments (e.g., ROOT_PATH=/manage for subdomain.com/manage)
+      - ROOT_PATH=${ROOT_PATH:/manage}
     restart: unless-stopped

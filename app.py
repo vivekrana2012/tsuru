@@ -41,7 +41,8 @@ async def lifespan(app: FastAPI):
 
 
 # Initialize FastAPI app with lifespan
-app = FastAPI(lifespan=lifespan)
+# Root path can be set via ROOT_PATH environment variable for reverse proxy deployments
+app = FastAPI(lifespan=lifespan, root_path=os.getenv('ROOT_PATH', ''))
 
 # Setup rate limiter
 app.state.limiter = limiter
@@ -77,8 +78,8 @@ async def post_login(
 
 
 @app.get("/logout")
-async def get_logout(session_id: Optional[str] = Cookie(None)):
-    return await logout(session_id)
+async def get_logout(request: Request, session_id: Optional[str] = Cookie(None)):
+    return await logout(request, session_id)
 
 
 @app.get("/setup-password", response_class=HTMLResponse)

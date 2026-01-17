@@ -191,11 +191,11 @@
     <div class="header-container">
         <h1>Tsuru (鶴)</h1>
         <div class="user-info">
-            Logged in as: {{ username }} | <a href="/logout">Logout</a>
+            Logged in as: {{ username }} | <a href="{{ base_path }}/logout">Logout</a>
         </div>
     </div>
     
-    <form action="/submit" method="post" class="form-container" id="urlForm">
+    <form action="{{ base_path }}/submit" method="post" class="form-container" id="urlForm">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <label>Paste URL here</label>

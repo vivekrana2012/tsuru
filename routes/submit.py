@@ -4,7 +4,7 @@ from typing import Optional
 
 from database import store_feed, add_to_tts_queue
 from auth import verify_session, get_session_user
-from routes.utils import templates, generate_csrf_token, validate_csrf_token, validate_url, VERSION
+from routes.utils import templates, generate_csrf_token, validate_csrf_token, validate_url, get_base_path, VERSION
 from fastapi.responses import RedirectResponse
 
 
@@ -16,8 +16,9 @@ async def submit(request: Request,
                 csrf_token: str = Form(...),
                 session_id: Optional[str] = Cookie(None)):
     """Handle URL submission (requires authentication)"""
+    base_path = get_base_path(request)
     if not verify_session(session_id):
-        return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(url=f"{base_path}/login", status_code=303)
     
     username = get_session_user(session_id)
     
@@ -29,7 +30,7 @@ async def submit(request: Request,
         new_token = generate_csrf_token()
         return templates.TemplateResponse(
             "index.html",
-            {"request": request, "error": "Invalid security token", "username": username, "csrf_token": new_token, "version": VERSION}
+            {"request": request, "error": "Invalid security token", "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
         )
     
     # Validate and normalize URL
@@ -39,7 +40,7 @@ async def submit(request: Request,
         new_token = generate_csrf_token()
         return templates.TemplateResponse(
             "index.html",
-            {"request": request, "error": validation_result["error"], "username": username, "csrf_token": new_token, "version": VERSION}
+            {"request": request, "error": validation_result["error"], "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
         )
     
     normalized_url = validation_result["url"]
@@ -51,12 +52,12 @@ async def submit(request: Request,
         if queued:
             return templates.TemplateResponse(
                 "index.html", 
-                {"request": request, "submitted_url": normalized_url, "message": "Added to TTS queue for processing", "username": username, "csrf_token": new_token, "version": VERSION}
+                {"request": request, "submitted_url": normalized_url, "message": "Added to TTS queue for processing", "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
             )
         else:
             return templates.TemplateResponse(
                 "index.html",
-                {"request": request, "error": "Failed to add to TTS queue", "username": username, "csrf_token": new_token, "version": VERSION}
+                {"request": request, "error": "Failed to add to TTS queue", "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
             )
     
     # Store feed entry directly (non-TTS)
@@ -66,10 +67,10 @@ async def submit(request: Request,
     if stored:
         return templates.TemplateResponse(
             "index.html", 
-            {"request": request, "submitted_url": normalized_url, "username": username, "csrf_token": new_token, "version": VERSION}
+            {"request": request, "submitted_url": normalized_url, "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
         )
     else:
         return templates.TemplateResponse(
             "index.html",
-            {"request": request, "error": "Failed to store feed entry", "username": username, "csrf_token": new_token, "version": VERSION}
+            {"request": request, "error": "Failed to store feed entry", "username": username, "csrf_token": new_token, "version": VERSION, "base_path": base_path}
         )
