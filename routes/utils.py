@@ -114,7 +114,7 @@ def generate_rss_xml(base_url: str) -> str:
             SubElement(item, 'pubDate').text = feed['created_at']
         
         # Add audio enclosure if TTS audio is available
-        if feed.get('audio_path') and feed.get('tts_enabled'):
+        if feed['audio_path'] and feed['tts_enabled']:
             audio_path = feed['audio_path']
             if os.path.exists(audio_path):
                 # Get file size

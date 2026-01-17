@@ -1,13 +1,19 @@
 """Google Gemini API integration for TTS processing"""
 import os
 import hashlib
+import wave
 import trafilatura
 from typing import Optional, Tuple
+from google import genai
+from google.genai import types
+from logger_config import setup_logging
+
+logger = setup_logging(__name__)
 
 
 def format_content_for_tts(content: str, title: str) -> Optional[str]:
     """
-    Use Gemma model to format content for TTS narration
+    Use Gemini model to format content for TTS narration
     
     Args:
         content: Raw extracted content
@@ -17,15 +23,11 @@ def format_content_for_tts(content: str, title: str) -> Optional[str]:
         Formatted transcript or None if failed
     """
     try:
-        import google.generativeai as genai
-        
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
             raise Exception("GEMINI_API_KEY not set")
         
-        genai.configure(api_key=api_key)
-        
-        formatting_model = genai.GenerativeModel('gemma-2-27b-it')
+        client = genai.Client(api_key=api_key)
         
         formatting_prompt = f"""You are a transcript formatter for text-to-speech systems. Your task is to take the following article content and format it as a clean, natural-sounding transcript suitable for TTS.
 
@@ -40,13 +42,17 @@ Content:
 
 Remember: Return ONLY the transcript text, nothing else."""
 
-        formatting_response = formatting_model.generate_content(formatting_prompt)
-        formatted_transcript = formatting_response.text.strip()
+        response = client.models.generate_content(
+            model='gemma-3-27b-it',
+            contents=formatting_prompt
+        )
+        
+        formatted_transcript = response.text.strip()
         
         return formatted_transcript if formatted_transcript else None
         
     except Exception as e:
-        print(f"Error formatting content: {str(e)}")
+        logger.error(f"Error formatting content: {str(e)}")
         return None
 
 
@@ -61,30 +67,34 @@ def generate_audio_from_text(text: str) -> Optional[bytes]:
         Audio data as bytes or None if failed
     """
     try:
-        import google.generativeai as genai
-        
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
             raise Exception("GEMINI_API_KEY not set")
         
-        genai.configure(api_key=api_key)
+        client = genai.Client(api_key=api_key)
         
-        tts_model = genai.GenerativeModel('gemini-2.0-flash-exp')
-        
-        tts_response = tts_model.generate_content(
-            text,
-            generation_config={
-                'response_modalities': ['AUDIO']
-            }
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-preview-tts',
+            contents=text,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name='Charon'
+                        )
+                    )
+                )
+            )
         )
         
-        if hasattr(tts_response, 'audio') and tts_response.audio:
-            return tts_response.audio
+        # Extract PCM audio data from response
+        audio_data = response.candidates[0].content.parts[0].inline_data.data
         
-        return None
+        return audio_data
         
     except Exception as e:
-        print(f"Error generating audio: {str(e)}")
+        logger.error(f"Error generating audio: {str(e)}")
         return None
 
 
@@ -107,15 +117,15 @@ def extract_content_from_url(url: str) -> Optional[str]:
         if not content:
             return None
         
-        # Truncate content if too long (Gemini has token limits)
-        max_chars = 30000
+        # Truncate content if too long (Gemini input token limit: 8192 tokens ≈ 16,384 chars)
+        max_chars = 16000
         if len(content) > max_chars:
             content = content[:max_chars] + "..."
         
         return content
         
     except Exception as e:
-        print(f"Error extracting content from URL: {str(e)}")
+        logger.error(f"Error extracting content from URL: {str(e)}")
         return None
 
 
@@ -147,16 +157,20 @@ def process_url_to_audio(url: str, title: str, audio_dir: str) -> Tuple[bool, Op
         if not audio_data:
             return False, None, "Failed to generate audio from text"
         
-        # Step 4: Save audio file
+        # Step 4: Save audio file as WAV (PCM format from new API)
         audio_filename = f"{hashlib.sha256(url.encode()).hexdigest()[:12]}.wav"
         audio_path = os.path.join(audio_dir, audio_filename)
         
-        with open(audio_path, 'wb') as f:
-            f.write(audio_data)
+        # Save as WAV file
+        with wave.open(audio_path, "wb") as wf:
+            wf.setnchannels(1)  # Mono
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(24000)  # 24kHz
+            wf.writeframes(audio_data)
         
         return True, audio_path, None
         
     except Exception as e:
         error_msg = str(e)
-        print(f"Error in TTS pipeline: {error_msg}")
+        logger.error(f"Error in TTS pipeline: {error_msg}")
         return False, None, error_msg

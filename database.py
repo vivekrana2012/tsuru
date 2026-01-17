@@ -1,12 +1,14 @@
 """Database operations for RSS Feed Manager"""
 import sqlite3
-import hashlib
 import os
 from datetime import datetime
 from typing import Optional
+from logger_config import setup_logging
+
+logger = setup_logging(__name__)
 
 # Database path - use data directory if available
-DATA_DIR = os.getenv('DATA_DIR', '.')
+DATA_DIR = os.getenv('DATA_DIR', 'data')
 DB_PATH = os.path.join(DATA_DIR, 'rss_feed.db')
 
 
@@ -117,8 +119,10 @@ def store_feed_with_audio(url: str, title: str, description: str, username: str,
             )
             conn.commit()
         
+        logger.info(f"Stored feed entry with audio: {title}")
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to store feed entry: {str(e)}")
         return False
 
 

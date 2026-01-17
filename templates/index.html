@@ -67,6 +67,42 @@
             white-space: nowrap;
         }
 
+        label.tts-label::before,
+        label.tts-label::after {
+            content: none;
+        }
+
+        label.tts-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        input[type="checkbox"] {
+            margin-bottom: 5px;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            width: 13px;
+            height: 13px;
+            border: 1px solid #000;
+            background-color: #fff;
+            position: relative;
+        }
+
+        input[type="checkbox"]:checked {
+            background-color: #000;
+        }
+
+        input[type="checkbox"]:checked::after {
+            content: "✓";
+            position: absolute;
+            color: #fff;
+            font-size: 14px;
+            top: -2px;
+            left: 2px;
+        }
+
         input[type="url"],
         input[type="text"] {
             font-family: "Courier New", Courier, monospace;
@@ -174,7 +210,7 @@
             <input type="text" name="description" placeholder="" required>
         </div>
         <div class="form-row">
-            <label>
+            <label class="tts-label">
                 <input type="checkbox" name="tts" value="true">
                 TTS
             </label>

@@ -1,11 +1,12 @@
 """Main application entry point for Tsuru RSS Feed Manager"""
 import os
 import asyncio
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Form, Cookie
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from typing import Optional
 
@@ -22,16 +23,32 @@ from routes import (
     rss_feed
 )
 from tts_worker import tts_worker
+from logger_config import configure_uvicorn_logging
 
-# Initialize FastAPI app
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup: Start the TTS worker
+    task = asyncio.create_task(tts_worker())
+    yield
+    # Shutdown: Cancel the TTS worker task
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+# Initialize FastAPI app with lifespan
+app = FastAPI(lifespan=lifespan)
 
 # Setup rate limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create audio directory
-DATA_DIR = os.getenv('DATA_DIR', '.')
+DATA_DIR = os.getenv('DATA_DIR', 'data')
 AUDIO_DIR = os.path.join(DATA_DIR, 'audio')
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
@@ -105,13 +122,16 @@ async def get_rss_feed(request: Request):
     return await rss_feed(request)
 
 
-@app.on_event("startup")
-async def start_tts_worker():
-    """Start the TTS worker on application startup"""
-    asyncio.create_task(tts_worker())
-
-
 if __name__ == "__main__":
     import uvicorn
+    
+    # Configure all logging
+    configure_uvicorn_logging()
+    
     port = int(os.getenv('PORT', 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        log_config=None  # Disable uvicorn's default log config
+    )

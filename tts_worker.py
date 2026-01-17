@@ -7,9 +7,12 @@ from database import (
     store_feed_with_audio
 )
 from gemini_service import process_url_to_audio
+from logger_config import setup_logging
+
+logger = setup_logging(__name__)
 
 # Audio directory
-DATA_DIR = os.getenv('DATA_DIR', '.')
+DATA_DIR = os.getenv('DATA_DIR', 'data')
 AUDIO_DIR = os.path.join(DATA_DIR, 'audio')
 
 
@@ -19,7 +22,7 @@ async def process_tts_queue():
         # Check if Gemini API key is set
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
-            print("Warning: GEMINI_API_KEY not set. TTS processing disabled.")
+            logger.warning("GEMINI_API_KEY not set. TTS processing disabled.")
             return
         
         # Get pending queue items (limit to 1 due to Gemini rate limits)
@@ -27,7 +30,7 @@ async def process_tts_queue():
         
         for item in queue_items:
             try:
-                print(f"Processing TTS for: {item['title']}")
+                logger.info(f"Processing TTS for: {item['title']}")
                 
                 # Update status to processing
                 update_tts_queue_status(item['id'], 'processing')
@@ -41,7 +44,7 @@ async def process_tts_queue():
                 
                 if success and audio_path:
                     # Store in feed table with audio path
-                    store_feed_with_audio(
+                    feed_stored = store_feed_with_audio(
                         item['url'],
                         item['title'],
                         item['description'],
@@ -49,10 +52,20 @@ async def process_tts_queue():
                         audio_path
                     )
                     
+                    if not feed_stored:
+                        # Feed storage failed
+                        update_tts_queue_status(
+                            item['id'],
+                            'failed',
+                            "Failed to store feed entry in database"
+                        )
+                        logger.error(f"Failed to store feed entry for: {item['title']}")
+                        continue
+                    
                     # Update queue status to completed
                     update_tts_queue_status(item['id'], 'completed')
                     
-                    print(f"Successfully processed TTS for: {item['title']}")
+                    logger.info(f"Successfully processed TTS for: {item['title']}")
                 else:
                     # Update queue status to failed
                     update_tts_queue_status(
@@ -60,17 +73,17 @@ async def process_tts_queue():
                         'failed',
                         error_msg or "Unknown error"
                     )
-                    print(f"Failed to process TTS: {error_msg}")
+                    logger.error(f"Failed to process TTS: {error_msg}")
                 
             except Exception as e:
                 error_msg = str(e)
-                print(f"Error processing TTS queue item {item['id']}: {error_msg}")
+                logger.error(f"Error processing TTS queue item {item['id']}: {error_msg}")
                 
                 # Update queue status to failed
                 update_tts_queue_status(item['id'], 'failed', error_msg)
     
     except Exception as e:
-        print(f"Error in TTS queue processing: {str(e)}")
+        logger.error(f"Error in TTS queue processing: {str(e)}")
 
 
 async def tts_worker():
@@ -79,7 +92,7 @@ async def tts_worker():
         try:
             await process_tts_queue()
         except Exception as e:
-            print(f"TTS worker error: {str(e)}")
+            logger.error(f"TTS worker error: {str(e)}")
         
         # Wait 60 seconds before next poll
         await asyncio.sleep(60)
