@@ -15,6 +15,7 @@ COPY database.py .
 COPY auth.py .
 COPY gemini_service.py .
 COPY tts_worker.py .
+COPY logger_config.py .
 COPY routes/ routes/
 COPY init.sql .
 COPY VERSION .
