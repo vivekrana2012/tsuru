@@ -5,6 +5,33 @@ All notable changes to Tsuru (鶴) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-01-17
+
+### Added
+- TTS (Text-to-Speech) functionality with Google Gemini API integration
+- TTS queue system for background processing
+- Background worker that polls TTS queue every minute
+- Content extraction using trafilatura
+- Two-step TTS pipeline: content formatting (gemma-2-27b-it) + audio generation (gemini-2.0-flash-exp)
+- Audio file storage in data/audio directory
+- TTS checkbox on submission form
+
+### Changed
+- Refactored codebase into modular structure:
+  - `database.py` - Database operations
+  - `auth.py` - Authentication and session management
+  - `gemini_service.py` - Gemini API integration
+  - `tts_worker.py` - Background TTS queue processor
+  - `routes/` package - Modular route handlers (login, setup, home, submit, feed)
+- Database schema updated with `tts_queue` table and TTS-related columns in `feed` table
+- Rate limiting: 1 Gemini API request per minute to comply with API limits
+
+### Infrastructure
+- Added GEMINI_API_KEY environment variable
+- Updated requirements.txt with google-generativeai package
+- Updated Dockerfile to copy new modular files
+- Enhanced docker-compose.yml with GEMINI_API_KEY configuration
+
 ## [1.0.0] - 2026-01-16
 
 ### Added
@@ -29,8 +56,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secure session management
 - Input validation and sanitization
 - HTTP-only and secure cookies
-
-## Future Versions
-
-### [2.0.0] - Planned
-- (Add your planned features here)
