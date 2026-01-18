@@ -1,8 +1,8 @@
 version: '3.8'
 
 services:
-  rss-feed:
-    build: .
+  tsuru:
+    image: vivekrana2012/tsuru:v2
     ports:
       - "8000:8000"
     volumes:
@@ -11,4 +11,8 @@ services:
       - DATA_DIR=/app/data
       - PORT=8000
       - SECRET_KEY=${SECRET_KEY:-please-change-this-secret-key-in-production}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Set ROOT_PATH for nginx sub-path deployments (e.g., ROOT_PATH=/manage for subdomain.com/manage)
+      # Default is empty (root path). Set to /manage in .env file or: ROOT_PATH=/manage docker-compose up -d
+      - ROOT_PATH=${ROOT_PATH:-}
     restart: unless-stopped

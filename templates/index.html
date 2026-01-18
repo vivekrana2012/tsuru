@@ -67,6 +67,42 @@
             white-space: nowrap;
         }
 
+        label.tts-label::before,
+        label.tts-label::after {
+            content: none;
+        }
+
+        label.tts-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        input[type="checkbox"] {
+            margin-bottom: 5px;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            width: 13px;
+            height: 13px;
+            border: 1px solid #000;
+            background-color: #fff;
+            position: relative;
+        }
+
+        input[type="checkbox"]:checked {
+            background-color: #000;
+        }
+
+        input[type="checkbox"]:checked::after {
+            content: "✓";
+            position: absolute;
+            color: #fff;
+            font-size: 14px;
+            top: -2px;
+            left: 2px;
+        }
+
         input[type="url"],
         input[type="text"] {
             font-family: "Courier New", Courier, monospace;
@@ -155,11 +191,11 @@
     <div class="header-container">
         <h1>Tsuru (鶴)</h1>
         <div class="user-info">
-            Logged in as: {{ username }} | <a href="/logout">Logout</a>
+            Logged in as: {{ username }} | <a href="{{ base_path }}/logout">Logout</a>
         </div>
     </div>
     
-    <form action="/submit" method="post" class="form-container" id="urlForm">
+    <form action="{{ base_path }}/submit" method="post" class="form-container" id="urlForm">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <label>Paste URL here</label>
@@ -173,6 +209,12 @@
             <label>Description</label>
             <input type="text" name="description" placeholder="" required>
         </div>
+        <div class="form-row">
+            <label class="tts-label">
+                <input type="checkbox" name="tts" value="true">
+                TTS
+            </label>
+        </div>
         <div class="button-row">
             <button type="submit">Add</button>
         </div>
@@ -181,6 +223,12 @@
     {% if error %}
     <div class="error">
         {{ error }}
+    </div>
+    {% endif %}
+
+    {% if message %}
+    <div class="message">
+        {{ message }}
     </div>
     {% endif %}
 

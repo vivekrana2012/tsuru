@@ -1,419 +1,138 @@
-from fastapi import FastAPI, Request, Form, Cookie, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
-from urllib.parse import urlparse, urlunparse
-from passlib.context import CryptContext
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from itsdangerous import URLSafeTimedSerializer, BadSignature
-import httpx
-import re
-import sqlite3
-import secrets
-import hashlib
+"""Main application entry point for Tsuru RSS Feed Manager"""
 import os
-from datetime import datetime
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Form, Cookie
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from typing import Optional
-from xml.etree.ElementTree import Element, SubElement, tostring
-from xml.dom import minidom
 
-# Load version
-with open('VERSION', 'r') as f:
-    VERSION = f.read().strip()
+from database import init_db
+from routes import (
+    limiter,
+    login_page,
+    login,
+    logout,
+    setup_password_page,
+    setup_password,
+    home,
+    submit,
+    rss_feed
+)
+from tts_worker import tts_worker
+from logger_config import configure_uvicorn_logging
 
-app = FastAPI()
 
-# Rate limiter setup
-limiter = Limiter(key_func=get_remote_address)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup: Start the TTS worker
+    task = asyncio.create_task(tts_worker())
+    yield
+    # Shutdown: Cancel the TTS worker task
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+# Initialize FastAPI app with lifespan
+# Root path can be set via ROOT_PATH environment variable for reverse proxy deployments
+app = FastAPI(lifespan=lifespan, root_path=os.getenv('ROOT_PATH', ''))
+
+# Setup rate limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CSRF token generator
-SECRET_KEY = os.getenv('SECRET_KEY', secrets.token_urlsafe(32))
-csrf_serializer = URLSafeTimedSerializer(SECRET_KEY)
+# Create audio directory
+DATA_DIR = os.getenv('DATA_DIR', 'data')
+AUDIO_DIR = os.path.join(DATA_DIR, 'audio')
+os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# Setup Jinja2 templates
-templates = Jinja2Templates(directory="templates")
-
-# Password hashing context
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-
-# Session storage (in production, use Redis or similar)
-sessions = {}
-
-# Database path - use data directory if available
-DATA_DIR = os.getenv('DATA_DIR', '.')
-DB_PATH = os.path.join(DATA_DIR, 'rss_feed.db')
-
-# CSRF protection functions
-def generate_csrf_token() -> str:
-    """Generate CSRF token"""
-    return csrf_serializer.dumps(secrets.token_urlsafe(32))
-
-def validate_csrf_token(token: str) -> bool:
-    """Validate CSRF token (expires after 1 hour)"""
-    try:
-        csrf_serializer.loads(token, max_age=3600)
-        return True
-    except (BadSignature, TypeError):
-        return False
-
-# Database initialization
-def init_db():
-    """Initialize database from SQL file"""
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        with open('init.sql', 'r') as f:
-            cursor.executescript(f.read())
-        conn.commit()
+# Mount audio directory for serving audio files
+app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 
 # Initialize database on startup
 init_db()
 
-def verify_session(session_id: Optional[str]) -> bool:
-    """Verify if session is valid"""
-    if not session_id:
-        return False
-    return session_id in sessions
 
-
-def store_feed(url: str, title: str, description: str, username: str) -> bool:
-    """Store feed entry in database"""
-    try:
-        # Generate guid from URL hash
-        guid = hashlib.sha256(url.encode()).hexdigest()[:12]
-        
-        # Use current UTC time for published date
-        published = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-        
-        # Store in database
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO feed (url, title, content, published_date, added_by) VALUES (?, ?, ?, ?, ?)",
-                (url, title, description, published, username)
-            )
-            conn.commit()
-        
-        return True
-    except Exception:
-        return False
-
-
-def generate_rss_xml(base_url: str) -> str:
-    """Generate RSS XML from database feed table"""
-    # Create RSS root element
-    rss = Element('rss', version='2.0')
-    channel = SubElement(rss, 'channel')
-    
-    # Channel metadata
-    SubElement(channel, 'title').text = 'Tsuru (鶴)'
-    SubElement(channel, 'link').text = base_url
-    SubElement(channel, 'description').text = 'Custom RSS feed from collected articles'
-    SubElement(channel, 'language').text = 'en-us'
-    SubElement(channel, 'lastBuildDate').text = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-    
-    # Fetch feed items from database
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM feed ORDER BY created_at DESC LIMIT 100"
-        )
-        feeds = cursor.fetchall()
-    
-    # Add items to RSS
-    for feed in feeds:
-        item = SubElement(channel, 'item')
-        SubElement(item, 'title').text = feed['title'] or 'No Title'
-        SubElement(item, 'link').text = feed['url']
-        SubElement(item, 'description').text = feed['content'] or ''
-        
-        # Generate guid from URL hash
-        guid = hashlib.sha256(feed['url'].encode()).hexdigest()[:12]
-        SubElement(item, 'guid').text = guid
-        
-        if feed['published_date']:
-            SubElement(item, 'pubDate').text = feed['published_date']
-        else:
-            SubElement(item, 'pubDate').text = feed['created_at']
-    
-    # Pretty print XML with proper UTF-8 encoding
-    xml_str = tostring(rss, encoding='utf-8', method='xml')
-    dom = minidom.parseString(xml_str)
-    pretty_xml = dom.toprettyxml(indent='  ', encoding='utf-8')
-    return pretty_xml.decode('utf-8')
-
-
+# Register routes
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    """Display login page"""
-    csrf_token = generate_csrf_token()
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "csrf_token": csrf_token
-    })
+async def get_login(request: Request):
+    return await login_page(request)
 
 
 @app.post("/login", response_class=HTMLResponse)
 @limiter.limit("5/minute")
-async def login(request: Request, username: str = Form(...), password: str = Form(...),
-               csrf_token: str = Form(...)):
-    """Handle login submission"""
-    # Validate CSRF token
-    if not validate_csrf_token(csrf_token):
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Invalid security token", "csrf_token": new_token}
-        )
-    
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        user = cursor.fetchone()
-    
-    if not user:
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Invalid username or password", "csrf_token": new_token}
-        )
-    
-    # Check if password is NULL - redirect to setup
-    if user['password'] is None:
-        # Store username in session for setup
-        session_id = secrets.token_urlsafe(32)
-        sessions[session_id] = {'username': username, 'setup_mode': True}
-        response = RedirectResponse(url="/setup-password", status_code=303)
-        response.set_cookie(
-            key="session_id", 
-            value=session_id, 
-            httponly=True, 
-            secure=True, 
-            samesite='lax'
-        )
-        return response
-    
-    # Verify credentials
-    if pwd_context.verify(password, user['password']):
-        # Create session
-        session_id = secrets.token_urlsafe(32)
-        sessions[session_id] = {'username': username}
-        
-        # Redirect to home with session cookie
-        response = RedirectResponse(url="/", status_code=303)
-        response.set_cookie(
-            key="session_id", 
-            value=session_id, 
-            httponly=True, 
-            secure=True, 
-            samesite='lax'
-        )
-        return response
-    
-    new_token = generate_csrf_token()
-    return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "Invalid username or password", "csrf_token": new_token}
-    )
+async def post_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    csrf_token: str = Form(...)
+):
+    return await login(request, username, password, csrf_token)
 
 
 @app.get("/logout")
-async def logout(session_id: Optional[str] = Cookie(None)):
-    """Handle logout"""
-    if session_id:
-        sessions.pop(session_id, None)
-    
-    response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(key="session_id")
-    return response
+async def get_logout(request: Request, session_id: Optional[str] = Cookie(None)):
+    return await logout(request, session_id)
 
 
 @app.get("/setup-password", response_class=HTMLResponse)
-async def setup_password_page(request: Request, session_id: Optional[str] = Cookie(None)):
-    """Display password setup page"""
-    if not session_id or session_id not in sessions or not sessions[session_id].get('setup_mode'):
-        return RedirectResponse(url="/login", status_code=303)
-    
-    username = sessions[session_id]['username']
-    csrf_token = generate_csrf_token()
-    return templates.TemplateResponse("setup_password.html", {
-        "request": request, 
-        "username": username,
-        "csrf_token": csrf_token
-    })
+async def get_setup_password(request: Request, session_id: Optional[str] = Cookie(None)):
+    return await setup_password_page(request, session_id)
 
 
 @app.post("/setup-password", response_class=HTMLResponse)
 @limiter.limit("5/minute")
-async def setup_password(request: Request, password: str = Form(...), 
-                        confirm_password: str = Form(...), csrf_token: str = Form(...),
-                        session_id: Optional[str] = Cookie(None)):
-    """Handle password setup"""
-    if not session_id or session_id not in sessions or not sessions[session_id].get('setup_mode'):
-        return RedirectResponse(url="/login", status_code=303)
-    
-    username = sessions[session_id]['username']
-    
-    # Validate CSRF token
-    if not validate_csrf_token(csrf_token):
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "setup_password.html",
-            {"request": request, "username": username, "error": "Invalid security token", "csrf_token": new_token}
-        )
-    
-    # Validate passwords match
-    if password != confirm_password:
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "setup_password.html",
-            {"request": request, "username": username, "error": "Passwords do not match", "csrf_token": new_token}
-        )
-    
-    # Validate password length
-    if len(password) < 6:
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "setup_password.html",
-            {"request": request, "username": username, "error": "Password must be at least 6 characters", "csrf_token": new_token}
-        )
-    
-    # Hash and save password
-    hashed_password = pwd_context.hash(password)
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET password = ? WHERE username = ?",
-            (hashed_password, username)
-        )
-        conn.commit()
-    
-    # Update session to normal mode
-    sessions[session_id] = {'username': username}
-    
-    # Redirect to home
-    return RedirectResponse(url="/", status_code=303)
+async def post_setup_password(
+    request: Request,
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    csrf_token: str = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    return await setup_password(request, password, confirm_password, csrf_token, session_id)
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, session_id: Optional[str] = Cookie(None)):
-    """Display home page (requires authentication)"""
-    if not verify_session(session_id):
-        return RedirectResponse(url="/login", status_code=303)
-    
-    username = sessions[session_id]['username']
-    csrf_token = generate_csrf_token()
-    return templates.TemplateResponse("index.html", {
-        "request": request, 
-        "username": username,
-        "csrf_token": csrf_token,
-        "version": VERSION
-    })
+async def get_home(request: Request, session_id: Optional[str] = Cookie(None)):
+    return await home(request, session_id)
 
 
 @app.post("/submit", response_class=HTMLResponse)
 @limiter.limit("10/minute")
-async def submit(request: Request, 
-                url: str = Form(..., max_length=2000),
-                title: str = Form(..., max_length=200), 
-                description: str = Form(..., max_length=1000),
-                csrf_token: str = Form(...),
-                session_id: Optional[str] = Cookie(None)):
-    """Handle URL submission (requires authentication)"""
-    if not verify_session(session_id):
-        return RedirectResponse(url="/login", status_code=303)
-    
-    username = sessions[session_id]['username']
-    
-    # Validate CSRF token
-    if not validate_csrf_token(csrf_token):
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "error": "Invalid security token", "username": username, "csrf_token": new_token, "version": VERSION}
-        )
-    
-    # Validate and normalize URL
-    validation_result = await validate_url(url)
-    
-    if not validation_result["valid"]:
-        new_token = generate_csrf_token()
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "error": validation_result["error"], "username": username, "csrf_token": new_token, "version": VERSION}
-        )
-    
-    normalized_url = validation_result["url"]
-    
-    # Store feed entry
-    stored = store_feed(normalized_url, title, description, username)
-    
-    new_token = generate_csrf_token()
-    if stored:
-        return templates.TemplateResponse(
-            "index.html", 
-            {"request": request, "submitted_url": normalized_url, "username": username, "csrf_token": new_token, "version": VERSION}
-        )
-    else:
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "error": "Failed to store feed entry", "username": username, "csrf_token": new_token, "version": VERSION}
-        )
-
-
-async def validate_url(url: str) -> dict:
-    """Validate and normalize URL, then verify if it responds"""
-    try:
-        url = url.strip()
-        if not url:
-            return {"valid": False, "error": "INVALID_URL"}
-        
-        # Add scheme if missing
-        if not re.match(r'^https?://', url, re.IGNORECASE):
-            url = 'http://' + url
-        
-        parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            return {"valid": False, "error": "INVALID_URL"}
-        
-        # Normalize URL
-        normalized = urlunparse((
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment
-        ))
-        
-        # Verify URL responds
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
-            try:
-                response = await client.head(normalized)
-                if response.status_code >= 400:
-                    return {"valid": False, "error": "INVALID_URL"}
-            except httpx.HTTPError:
-                return {"valid": False, "error": "INVALID_URL"}
-        
-        return {"valid": True, "url": normalized}
-        
-    except Exception:
-        return {"valid": False, "error": "INVALID_URL"}
+async def post_submit(
+    request: Request,
+    url: str = Form(..., max_length=2000),
+    title: str = Form(..., max_length=200),
+    description: str = Form(..., max_length=1000),
+    tts: Optional[str] = Form(None),
+    csrf_token: str = Form(...),
+    session_id: Optional[str] = Cookie(None)
+):
+    return await submit(request, url, title, description, tts, csrf_token, session_id)
 
 
 @app.get("/feed.xml")
-async def rss_feed(request: Request):
-    """Serve RSS XML feed"""
-    base_url = f"{request.url.scheme}://{request.url.netloc}"
-    xml_content = generate_rss_xml(base_url)
-    return Response(content=xml_content, media_type="application/rss+xml; charset=utf-8")
+async def get_rss_feed(request: Request):
+    return await rss_feed(request)
 
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # Configure all logging
+    configure_uvicorn_logging()
+    
     port = int(os.getenv('PORT', 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        log_config=None  # Disable uvicorn's default log config
+    )

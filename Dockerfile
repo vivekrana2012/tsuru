@@ -11,12 +11,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY app.py .
+COPY database.py .
+COPY auth.py .
+COPY gemini_service.py .
+COPY tts_worker.py .
+COPY logger_config.py .
+COPY routes/ routes/
 COPY init.sql .
 COPY VERSION .
 COPY templates/ templates/
 
-# Create data directory for database
-RUN mkdir -p /app/data
+# Create data and audio directories
+RUN mkdir -p /app/data /app/data/audio
 
 # Expose port
 EXPOSE 8000
