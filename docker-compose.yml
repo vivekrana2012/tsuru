@@ -13,5 +13,6 @@ services:
       - SECRET_KEY=${SECRET_KEY:-please-change-this-secret-key-in-production}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       # Set ROOT_PATH for nginx sub-path deployments (e.g., ROOT_PATH=/manage for subdomain.com/manage)
-      - ROOT_PATH=${ROOT_PATH:/manage}
+      # Default is empty (root path). Set to /manage in .env file or: ROOT_PATH=/manage docker-compose up -d
+      - ROOT_PATH=${ROOT_PATH:-}
     restart: unless-stopped
